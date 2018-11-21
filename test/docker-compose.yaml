@@ -1,0 +1,58 @@
+version: '3.4'
+
+# NOTE: Cassandra service takes a while to start (~1 minute).
+# So the Kafka and Cassandra service cannot be "linked" directly
+# to go-common-query, some delay is required after starting Zookeeper,
+# Kafka, and Cassandra before go-common-query can be started and used.
+# See the run_test.sh file.
+services:
+  cassandra:
+    image: cassandra
+    container_name: cassandra
+    ports:
+      - "9042:9042"
+
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    environment:
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+    links:
+      - zookeeper
+    ports:
+     - "9092:9092"
+
+  mongo:
+    image: mongo
+    container_name: mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+    ports:
+      - "27017:27017"
+
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    ports:
+      - 2181:2181
+
+  go-eventpersistence:
+    image: terrextech/go-eventpersistence:v4.0.0
+    env_file:
+      - ./.envp
+
+  go-eventstore-query:
+    image: terrextech/go-eventstore-query:v4.0.0
+    env_file:
+      - ./.envq
+
+  go-agg-builder:
+    build:
+      context: ../
+      dockerfile: Dockerfile_test
+      args:
+        SOURCE_REPO: go-agg-builder
+    env_file:
+      - ../test.env
