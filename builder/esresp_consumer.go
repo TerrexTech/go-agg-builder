@@ -158,6 +158,7 @@ func (e *esRespHandler) ConsumeClaim(
 			doc := &model.Document{}
 			err := json.Unmarshal(msg.Value, doc)
 			if err != nil {
+				session.MarkMessage(msg, "")
 				err = errors.Wrap(err, "Error Unmarshalling ESQueryResponse into Document")
 				log.Println(err)
 				continue
@@ -173,6 +174,7 @@ func (e *esRespHandler) ConsumeClaim(
 			events := &[]model.Event{}
 			err = json.Unmarshal(doc.Data, events)
 			if err != nil {
+				session.MarkMessage(msg, "")
 				err = errors.Wrap(
 					err,
 					"ESQueryResponse-Consumer: Error Unmarshalling Document-response into Events",
@@ -220,6 +222,8 @@ func (e *esRespHandler) ConsumeClaim(
 						e.versionChan <- event.Version
 					}
 				}
+				session.MarkMessage(msg, "")
+
 			}
 		}
 	}
