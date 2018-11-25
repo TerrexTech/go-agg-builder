@@ -10,12 +10,12 @@
   version = "v1.19.0"
 
 [[projects]]
-  digest = "1:96e79b471862d93249fbf45b17882d714683d05492f499fa80e7a496f066f561"
+  digest = "1:c39cffe81b7e0d2ca90e4e3494b37bcf556dac8df9d9ffdda2a0148d63378cf5"
   name = "github.com/TerrexTech/go-common-models"
   packages = ["model"]
   pruneopts = "UT"
-  revision = "741d013a6c10a4d363ba07faf4df424544b3ce48"
-  version = "v1.0.0"
+  revision = "4b436fe418ef1124f7ceaab444f224aab97a0d2e"
+  version = "v1.2.0"
 
 [[projects]]
   digest = "1:9e040726ee775fa241bf96d3c11533a5312d9bcb00a594b63679bff456a4522c"
@@ -99,7 +99,7 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:053180bed0a3d0e7395b2a42e8b6bb97f99fdef8cc9e70ba91725bbce9f6015e"
+  digest = "1:1a5f28249f1a5b118994359a1c7b8c53ee1ff47aa7fe65884fbd20cd237001f4"
   name = "github.com/gocql/gocql"
   packages = [
     ".",
@@ -108,7 +108,7 @@
     "internal/streams",
   ]
   pruneopts = "UT"
-  revision = "33c0e89ca93ad9f5069645af476dfb1f97195621"
+  revision = "70385f88b28b43805bd83d212169ab2d38810b15"
 
 [[projects]]
   digest = "1:c594a691090b434d55c67f6cc8e326ef5ba49452abc059821bd5d4fd4cdef08c"
@@ -217,7 +217,7 @@
   version = "v0.0.14"
 
 [[projects]]
-  digest = "1:42e29deef12327a69123b9cb2cb45fee4af5c12c2a23c6e477338279a052703f"
+  digest = "1:5f4b78246f0bcb105b1e3b2b9e22b52a57cd02f57a8078572fe27c62f4a75ff7"
   name = "github.com/onsi/ginkgo"
   packages = [
     ".",
@@ -240,8 +240,8 @@
     "types",
   ]
   pruneopts = "UT"
-  revision = "3774a09d95489ccaa16032e0770d08ea77ba6184"
-  version = "v1.6.0"
+  revision = "2e1be8f7d90e9d3e3e58b0ce470f2f14d075406f"
+  version = "v1.7.0"
 
 [[projects]]
   digest = "1:7a137fb7718928e473b7d805434ae563ec41790d3d227cdc64e8b14d1cab8a1f"
@@ -344,7 +344,7 @@
   name = "golang.org/x/sys"
   packages = ["unix"]
   pruneopts = "UT"
-  revision = "0cf1ed9e522b7dbb416f080a5c8003de9b702bf4"
+  revision = "62eef0e2fa9b2c385f7b2778e763486da6880d37"
 
 [[projects]]
   digest = "1:4392fcf42d5cf0e3ff78c96b2acf8223d49e4fdc53eb77c99d2f8dfe4680e006"

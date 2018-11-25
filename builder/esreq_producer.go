@@ -22,6 +22,7 @@ type esReqConfig struct {
 	mongoColl       *mongo.Collection
 	kafkaProdConfig *kafka.ProducerConfig
 	kafkaTopic      string
+	respTopic       string
 }
 
 type esReqProducer struct {
@@ -47,6 +48,9 @@ func newESReqProducer(config *esReqConfig) (*esReqProducer, error) {
 	}
 	if config.kafkaTopic == "" {
 		return nil, errors.New("kafkaTopic cannot be blank")
+	}
+	if config.respTopic == "" {
+		return nil, errors.New("respTopic cannot be blank")
 	}
 
 	p, err := kafka.NewProducer(config.kafkaProdConfig)
@@ -95,21 +99,21 @@ func (er *esReqProducer) queryEventStore(correlationID uuuid.UUID) error {
 		return err
 	}
 
-	cid, err := uuuid.NewV4()
+	uuid, err := uuuid.NewV4()
 	if err != nil {
 		err = errors.Wrap(err, "Error generating UUID for ESQuery")
 		log.Println(err)
-		cid = uuuid.UUID{}
 	}
 	// Create EventStoreQuery
 	esQuery := model.EventStoreQuery{
 		AggregateID:      er.aggID,
 		AggregateVersion: currVersion,
-		CorrelationID:    cid,
+		CorrelationID:    correlationID,
 		// Hardcoding for now, otherwise we'll calculate this based
 		// on current year, and account for NewYear-buffers and such
 		YearBucket: 2018,
-		UUID:       correlationID,
+		UUID:       uuid,
+		Topic:      er.respTopic,
 	}
 	esMsg, err := json.Marshal(esQuery)
 	if err != nil {

@@ -2,12 +2,15 @@ package builder
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/TerrexTech/go-common-models/model"
 
 	"github.com/TerrexTech/uuuid"
 
@@ -23,6 +26,7 @@ import (
 var _ = Describe("Consumers", func() {
 	var (
 		kafkaBrokers []string
+		metaColl     *mongo.Collection
 
 		cmdTopic       string
 		eventsTopic    string
@@ -73,10 +77,13 @@ var _ = Describe("Consumers", func() {
 		client, err := mongo.NewClient(mongoConfig)
 		Expect(err).ToNot(HaveOccurred())
 
-		conn := &mongo.ConnectionConfig{
+		mongoConn := &mongo.ConnectionConfig{
 			Client:  client,
 			Timeout: uint32(mongoResTimeout),
 		}
+		metaColl, err = createMetaCollection(aggID, mongoConn, mongoDatabase, "test_meta")
+		Expect(err).ToNot(HaveOccurred())
+
 		// Index Configuration
 		indexConfigs := []mongo.IndexConfig{
 			mongo.IndexConfig{
@@ -93,7 +100,7 @@ var _ = Describe("Consumers", func() {
 
 		// ====> Create New Collection
 		c := &mongo.Collection{
-			Connection:   conn,
+			Connection:   mongoConn,
 			Name:         "test_coll",
 			Database:     mongoDatabase,
 			SchemaStruct: &item{},
@@ -119,6 +126,7 @@ var _ = Describe("Consumers", func() {
 			"%s.%d",
 			os.Getenv("KAFKA_CONSUMER_EVENT_QUERY_TOPIC"), aggID,
 		)
+		eosToken := os.Getenv("KAFKA_END_OF_STREAM_TOKEN")
 
 		kc := KafkaConfig{
 			ESQueryResCons: &kafka.ConsumerConfig{
@@ -126,6 +134,7 @@ var _ = Describe("Consumers", func() {
 				GroupName:    cESQueryGroup,
 				Topics:       []string{cESQueryTopic},
 			},
+			EOSToken: eosToken,
 
 			ESQueryReqProd: &kafka.ProducerConfig{
 				KafkaBrokers: kafkaBrokers,
@@ -135,7 +144,7 @@ var _ = Describe("Consumers", func() {
 		mc := MongoConfig{
 			AggregateID:        aggID,
 			AggCollection:      collection,
-			Connection:         conn,
+			Connection:         mongoConn,
 			MetaDatabaseName:   mongoDatabase,
 			MetaCollectionName: "test_meta",
 		}
@@ -153,8 +162,8 @@ var _ = Describe("Consumers", func() {
 		eventProdInput = p.Input()
 	})
 
-	Context("Events are produced", func() {
-		Specify("Events should appear on event channel", func() {
+	Context("Events are fetched", func() {
+		Specify("events should appear on event channel", func() {
 			mockEvent := mockEvent(eventProdInput, eventsTopic, aggID)
 
 			log.Println(cmdTopic)
@@ -169,12 +178,15 @@ var _ = Describe("Consumers", func() {
 			eventSuccess := false
 			var eventLock sync.RWMutex
 
-			g := eventsIO.RoutinesGroup()
-			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Second)
+			g := eventsIO.ErrGroup()
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
 
+			time.Sleep(5 * time.Second)
 			g.Go(func() error {
-				events, err := eventsIO.BuildState(mockEvent.CorrelationID)
+				defer GinkgoRecover()
+
+				events, err := eventsIO.BuildState(mockEvent.UUID, 15)
 				Expect(err).ToNot(HaveOccurred())
 				// Allow time for event to be processed by event-persistence and such
 				time.Sleep(5 * time.Second)
@@ -222,6 +234,80 @@ var _ = Describe("Consumers", func() {
 			<-eventsIO.Wait()
 			Expect(eventSuccess).To(BeTrue())
 		})
+
+		Context("EOSEvent is not received within specified Timeout", func() {
+			var eventID uuuid.UUID
+
+			BeforeEach(func() {
+				// Produce mock-EventStoreQuery response that doesn't send EOSEvent
+				kc := ioConfig.KafkaConfig
+
+				prod, err := kafka.NewProducer(kc.ESQueryReqProd)
+				Expect(err).ToNot(HaveOccurred())
+
+				eventID, err = uuuid.NewV4()
+				Expect(err).ToNot(HaveOccurred())
+				mockEvent := []model.Event{
+					model.Event{
+						Action: "test-action",
+						UUID:   eventID,
+					},
+				}
+				marshalEvent, err := json.Marshal(mockEvent)
+				Expect(err).ToNot(HaveOccurred())
+
+				docID, err := uuuid.NewV4()
+				Expect(err).ToNot(HaveOccurred())
+				doc := model.Document{
+					Data: marshalEvent,
+					UUID: docID,
+				}
+				marshalDoc, err := json.Marshal(doc)
+				Expect(err).ToNot(HaveOccurred())
+				mockESResp := kafka.CreateMessage(kc.ESQueryResCons.Topics[0], marshalDoc)
+				prod.Input() <- mockESResp
+				err = prod.Close()
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("should close response-channel on timeout", func(done Done) {
+				// Check if timeout-mechanism closes the channel so the code can proceed
+				esRespHandler, err := newESRespHandler(&esRespHandlerConfig{
+					aggID:          ioConfig.MongoConfig.AggregateID,
+					metaCollection: metaColl,
+					versionChan:    make(chan int64, 128),
+				})
+				Expect(err).ToNot(HaveOccurred())
+				esRespConsumer, err := kafka.NewConsumer(ioConfig.KafkaConfig.ESQueryResCons)
+				Expect(err).ToNot(HaveOccurred())
+				go func() {
+					defer GinkgoRecover()
+					err := esRespConsumer.Consume(context.Background(), esRespHandler)
+					Expect(err).To(HaveOccurred())
+				}()
+
+				defer func() {
+					defer GinkgoRecover()
+					err := esRespConsumer.Close()
+					Expect(err).ToNot(HaveOccurred())
+				}()
+
+				cid, err := uuuid.NewV4()
+				Expect(err).ToNot(HaveOccurred())
+				eventResp, err := esRespHandler.CollectEvents(ioConfig.KafkaConfig.EOSToken, cid, 15)
+				Expect(err).ToNot(HaveOccurred())
+				eventReceived := false
+				for er := range eventResp {
+					if er.Event.UUID == eventID {
+						Expect(er.Error).ToNot(HaveOccurred())
+						eventReceived = true
+					}
+				}
+
+				close(done)
+				Expect(eventReceived).To(BeTrue())
+			}, 20)
+		})
 	})
 
 	It("should update Aggregate-meta", func() {
@@ -235,7 +321,7 @@ var _ = Describe("Consumers", func() {
 		ioConfig.MongoConfig.AggregateID = aggID
 		eventsIO, err := Init(ioConfig)
 		Expect(err).ToNot(HaveOccurred())
-		_, err = eventsIO.BuildState(cid)
+		_, err = eventsIO.BuildState(cid, 15)
 		Expect(err).ToNot(HaveOccurred())
 
 		// Allow time for event to be processed by event-persistence and such
