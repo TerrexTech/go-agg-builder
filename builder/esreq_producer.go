@@ -37,7 +37,7 @@ func newESReqProducer(config *esReqConfig) (*esReqProducer, error) {
 	if config.closeCtx == nil {
 		return nil, errors.New("closeCtx cannot be nil")
 	}
-	if config.aggID <= 1 {
+	if config.aggID < 1 {
 		return nil, errors.New("aggID cannot be less than 1")
 	}
 	if config.mongoColl == nil {
