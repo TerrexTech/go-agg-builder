@@ -13,7 +13,9 @@ import (
 // KafkaConfig is the configuration for Kafka, such as brokers and topics.
 type KafkaConfig struct {
 	// Consumer for EventStoreQuery-response
+	// The first topic in Consumer-Topics is used as "Topic" field for EventStoreQuery.
 	ESQueryResCons *kafka.ConsumerConfig
+	EOSToken       string
 
 	// Producer for making requests to ESQuery
 	ESQueryReqProd *kafka.ProducerConfig
@@ -72,6 +74,11 @@ func validateConfig(config IOConfig) error {
 			"KafkaConfig: ESQueryResCons is required, but none was specified",
 		)
 	}
+	if kc.EOSToken == "" {
+		return errors.New(
+			"KafkaConfig: EOSToken is required, but none was specified",
+		)
+	}
 	if kc.ESQueryReqProd == nil {
 		return errors.New(
 			"KafkaConfig: ESQueryReqProd is required, but none was specified",
@@ -126,6 +133,7 @@ func Init(config IOConfig) (*EventsIO, error) {
 		aggID:           mgConfig.AggregateID,
 		kafkaProdConfig: kfConfig.ESQueryReqProd,
 		kafkaTopic:      kfConfig.ESQueryReqTopic,
+		respTopic:       kfConfig.ESQueryResCons.Topics[0],
 		mongoColl:       metaCollection,
 	})
 	if err != nil {
@@ -134,31 +142,12 @@ func Init(config IOConfig) (*EventsIO, error) {
 		return nil, err
 	}
 
-	eventsIO := newEventsIO(ctx, g, closeChan, esReqProd)
-	g.Go(func() error {
-		<-closeChan
-		eventsIO.ctxLock.Lock()
-		eventsIO.ctxOpen = false
-		eventsIO.ctxLock.Unlock()
-
-		log.Println("Received Close signal")
-		log.Println("Signalling routines to close")
-		cancel()
-		close(closeChan)
-		return nil
-	})
-	g.Go(func() error {
-		<-ctx.Done()
-		eventsIO.Close()
-		return nil
-	})
-
 	// ESQueryResponse-Consumer
 	log.Println("Initializing ESQueryResponse-Consumer")
 	esRespConsumer, err := kafka.NewConsumer(kfConfig.ESQueryResCons)
 	if err != nil {
 		err = errors.Wrap(err, "Error creating ESQueryResponse-Consumer")
-		closeChan <- struct{}{}
+		cancel()
 		return nil, err
 	}
 	g.Go(func() error {
@@ -182,15 +171,20 @@ func Init(config IOConfig) (*EventsIO, error) {
 	})
 
 	log.Println("Starting ESResponse Consumer")
+	esRespHandler, err := newESRespHandler(&esRespHandlerConfig{
+		aggID:          config.MongoConfig.AggregateID,
+		metaCollection: metaCollection,
+		versionChan:    make(chan int64, 128),
+	})
+	if err != nil {
+		err = errors.Wrap(err, "Error initializing ESResponse Consumer")
+		cancel()
+		return nil, err
+	}
+
 	// ESQueryResponse-Consumer Messages
 	g.Go(func() error {
-		handler := &esRespHandler{
-			aggID:          config.MongoConfig.AggregateID,
-			eventResp:      (chan<- *EventResponse)(eventsIO.eventResp),
-			metaCollection: metaCollection,
-			versionChan:    make(chan int64, 128),
-		}
-		err = esRespConsumer.Consume(ctx, handler)
+		err = esRespConsumer.Consume(ctx, esRespHandler)
 		if err != nil {
 			err = errors.Wrap(err, "Failed to consume ESQueryResponse")
 		}
@@ -198,15 +192,37 @@ func Init(config IOConfig) (*EventsIO, error) {
 		return err
 	})
 
+	eventsIOCtx := &ctxConfig{
+		ErrGroupCtx: ctx,
+		ErrGroup:    g,
+		CloseChan:   closeChan,
+	}
+	eventsIOESConfig := &esConfig{
+		ESReqProd:     esReqProd,
+		ESRespHandler: esRespHandler,
+		EOSToken:      kfConfig.EOSToken,
+	}
+	eventsIO, err := newEventsIO(eventsIOCtx, eventsIOESConfig)
+	if err != nil {
+		err = errors.Wrap(err, "Error initializing EventsIO")
+		cancel()
+		return nil, err
+	}
+	g.Go(func() error {
+		<-closeChan
+		eventsIO.ctx.ctxLock.Lock()
+		eventsIO.ctx.ctxOpen = false
+		eventsIO.ctx.ctxLock.Unlock()
+
+		log.Println("Received Close signal")
+		log.Println("Signalling routines to close")
+		cancel()
+		close(closeChan)
+		return nil
+	})
 	g.Go(func() error {
 		<-ctx.Done()
-		for er := range eventsIO.eventResp {
-			if er == nil {
-				continue
-			}
-			log.Printf("EventResponse: Drained Event with UUID: %s", er.Event.UUID)
-		}
-		log.Println("--> Closed EventResponse drain-routine")
+		eventsIO.Close()
 		return nil
 	})
 

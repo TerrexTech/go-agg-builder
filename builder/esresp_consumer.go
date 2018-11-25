@@ -1,9 +1,12 @@
 package builder
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
+	"time"
 
 	"github.com/Shopify/sarama"
 	"github.com/TerrexTech/go-common-models/model"
@@ -18,13 +21,98 @@ type EventResponse struct {
 	Error error
 }
 
+type esRespHandlerConfig struct {
+	aggID          int8
+	metaCollection *mongo.Collection
+	versionChan    chan int64
+}
+
+type collectConfig struct {
+	enable bool
+
+	eosToken         string
+	eosCorrelationID uuuid.UUID
+	timeoutCtx       context.Context
+
+	respChan chan<- *EventResponse
+}
+
 // esRespHandler handler for Consumer Messages
 type esRespHandler struct {
-	aggID          int8
-	eventResp      chan<- *EventResponse
-	metaCollection *mongo.Collection
+	*esRespHandlerConfig
+	collect     collectConfig
+	handlerLock sync.RWMutex
+}
 
-	versionChan chan int64
+func newESRespHandler(config *esRespHandlerConfig) (*esRespHandler, error) {
+	if config.aggID == 0 {
+		return nil, errors.New("config error: aggID must be greater than 0")
+	}
+	if config.metaCollection == nil {
+		return nil, errors.New("config error: metaCollection cannot be nil")
+	}
+	if config.versionChan == nil {
+		return nil, errors.New("config error: versionChan cannot be nil")
+	}
+
+	return &esRespHandler{
+		esRespHandlerConfig: config,
+		collect:             collectConfig{},
+	}, nil
+}
+
+func (e *esRespHandler) CollectEvents(
+	eosToken string,
+	eosCorrelationID uuuid.UUID,
+	timeoutSec int,
+) (<-chan *EventResponse, error) {
+	e.handlerLock.RLock()
+	collecting := e.collect.enable
+	e.handlerLock.RUnlock()
+	if collecting {
+		return nil, errors.New("already collecting events")
+	}
+
+	ctx, _ := context.WithTimeout(
+		context.Background(),
+		time.Duration(timeoutSec)*time.Second,
+	)
+	respChan := make(chan *EventResponse)
+	e.handlerLock.Lock()
+	e.collect = collectConfig{
+		enable:           true,
+		eosToken:         eosToken,
+		eosCorrelationID: eosCorrelationID,
+		timeoutCtx:       ctx,
+		respChan:         (chan<- *EventResponse)(respChan),
+	}
+	e.handlerLock.Unlock()
+
+	go func() {
+		<-ctx.Done()
+		e.handlerLock.RLock()
+		collecting := e.collect.enable
+		e.handlerLock.RUnlock()
+
+		if collecting {
+			log.Println("ESResp-Consumer timed out")
+			for {
+				select {
+				case esResp := <-respChan:
+					if esResp != nil {
+						log.Printf("Drained Event with UUID: %s", esResp.Event.UUID)
+					}
+				default:
+					e.handlerLock.Lock()
+					e.collect.enable = false
+					close(respChan)
+					e.handlerLock.Unlock()
+				}
+			}
+		}
+	}()
+
+	return (<-chan *EventResponse)(respChan), nil
 }
 
 func (e *esRespHandler) Setup(sarama.ConsumerGroupSession) error {
@@ -37,7 +125,18 @@ func (e *esRespHandler) Setup(sarama.ConsumerGroupSession) error {
 func (e *esRespHandler) Cleanup(sarama.ConsumerGroupSession) error {
 	log.Println("Closing ESQueryRespConsumer")
 
-	close(e.eventResp)
+	if &e.collect != nil {
+		e.handlerLock.RLock()
+		collectEnabled := e.collect.enable
+		e.handlerLock.RUnlock()
+
+		if collectEnabled {
+			e.handlerLock.Lock()
+			e.collect.enable = false
+			close(e.collect.respChan)
+			e.handlerLock.Unlock()
+		}
+	}
 	return errors.New("ESQueryResponse-Consumer unexpectedly closed")
 }
 
@@ -55,6 +154,7 @@ func (e *esRespHandler) ConsumeClaim(
 			if msg == nil {
 				continue
 			}
+
 			doc := &model.Document{}
 			err := json.Unmarshal(msg.Value, doc)
 			if err != nil {
@@ -78,19 +178,48 @@ func (e *esRespHandler) ConsumeClaim(
 					"ESQueryResponse-Consumer: Error Unmarshalling Document-response into Events",
 				)
 				log.Println(err)
-				continue
-			}
-
-			// Distribute events to their respective channels
-			for _, event := range *events {
-				if event.UUID == (uuuid.UUID{}) {
-					continue
-				}
-				e.eventResp <- &EventResponse{
-					Event: event,
+				e.handlerLock.RLock()
+				e.collect.respChan <- &EventResponse{
 					Error: docError,
 				}
-				e.versionChan <- event.Version
+				e.handlerLock.RUnlock()
+			} else {
+				e.handlerLock.RLock()
+				collecting := e.collect.enable
+				e.handlerLock.RUnlock()
+
+				if collecting {
+					// Distribute events to their respective channels
+					for _, event := range *events {
+						if event.UUID == (uuuid.UUID{}) {
+							continue
+						}
+
+						e.handlerLock.RLock()
+						eosToken := e.collect.eosToken
+						correlationID := e.collect.eosCorrelationID
+						e.handlerLock.RUnlock()
+
+						if event.Action == eosToken && event.UUID == correlationID {
+							log.Printf("Received EOS Event with UUID: %s %s", event.UUID, correlationID)
+							e.handlerLock.Lock()
+							e.collect.enable = false
+							close(e.collect.respChan)
+							e.handlerLock.Unlock()
+							break
+						}
+
+						e.handlerLock.RLock()
+						if e.collect.enable {
+							e.collect.respChan <- &EventResponse{
+								Event: event,
+								Error: docError,
+							}
+						}
+						e.handlerLock.RUnlock()
+						e.versionChan <- event.Version
+					}
+				}
 			}
 		}
 	}

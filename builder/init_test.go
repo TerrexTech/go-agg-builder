@@ -73,6 +73,13 @@ var _ = Describe("InitTest", func() {
 			Expect(eventsIO).To(BeNil())
 		})
 
+		It("should return error if EOSToken is not specified", func() {
+			ioConfig.KafkaConfig.EOSToken = ""
+			eventsIO, err := Init(ioConfig)
+			Expect(err).To(HaveOccurred())
+			Expect(eventsIO).To(BeNil())
+		})
+
 		It("should return error if ESQueryReqProd is not specified", func() {
 			ioConfig.KafkaConfig.ESQueryReqProd = nil
 			eventsIO, err := Init(ioConfig)

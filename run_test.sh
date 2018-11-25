@@ -66,4 +66,6 @@ sleep 10
 docker ps -a
 
 docker-compose up --exit-code-from go-agg-builder
-exit $?
+rc=$?
+docker-compose down --rmi local --volumes
+exit $rc

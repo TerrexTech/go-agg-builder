@@ -125,7 +125,7 @@ func main() {
 		log.Println(err)
 		cid = uuuid.UUID{}
 	}
-	events, err := aggBuilder.BuildState(cid)
+	events, err := aggBuilder.BuildState(cid, 15)
 	if err != nil {
 		err = errors.Wrap(err, "Error building state")
 		log.Println(err)
