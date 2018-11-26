@@ -10,12 +10,12 @@
   version = "v1.19.0"
 
 [[projects]]
-  digest = "1:c39cffe81b7e0d2ca90e4e3494b37bcf556dac8df9d9ffdda2a0148d63378cf5"
+  digest = "1:cfc553aea6ed5498df3c05f139ad0a0c7345bfaf595902d6c02fe5fc72f5aeb6"
   name = "github.com/TerrexTech/go-common-models"
   packages = ["model"]
   pruneopts = "UT"
-  revision = "4b436fe418ef1124f7ceaab444f224aab97a0d2e"
-  version = "v1.2.0"
+  revision = "4fb8fe6f5ae0bf1006f9b268de7a26ed7e0f65d9"
+  version = "v2.0.0"
 
 [[projects]]
   digest = "1:9e040726ee775fa241bf96d3c11533a5312d9bcb00a594b63679bff456a4522c"
