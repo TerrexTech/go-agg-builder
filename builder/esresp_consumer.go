@@ -154,6 +154,12 @@ func (e *esRespHandler) ConsumeClaim(
 			if msg == nil {
 				continue
 			}
+			e.handlerLock.RLock()
+			collecting := e.collect.enable
+			e.handlerLock.RUnlock()
+			if !collecting {
+				continue
+			}
 
 			doc := &model.Document{}
 			err := json.Unmarshal(msg.Value, doc)
@@ -180,51 +186,47 @@ func (e *esRespHandler) ConsumeClaim(
 					"ESQueryResponse-Consumer: Error Unmarshalling Document-response into Events",
 				)
 				log.Println(err)
+
 				e.handlerLock.RLock()
 				e.collect.respChan <- &EventResponse{
 					Error: docError,
 				}
 				e.handlerLock.RUnlock()
-			} else {
+				continue
+			}
+
+			// Distribute events
+			for _, event := range *events {
+				if event.UUID == (uuuid.UUID{}) {
+					continue
+				}
+
 				e.handlerLock.RLock()
-				collecting := e.collect.enable
+				eosToken := e.collect.eosToken
+				correlationID := e.collect.eosCorrelationID
 				e.handlerLock.RUnlock()
 
-				if collecting {
-					// Distribute events to their respective channels
-					for _, event := range *events {
-						if event.UUID == (uuuid.UUID{}) {
-							continue
-						}
+				if event.Action == eosToken && event.UUID == correlationID {
+					log.Printf("Received EOS Event with UUID: %s %s", event.UUID, correlationID)
+					e.handlerLock.Lock()
+					e.collect.enable = false
+					close(e.collect.respChan)
+					e.handlerLock.Unlock()
+					break
+				}
 
-						e.handlerLock.RLock()
-						eosToken := e.collect.eosToken
-						correlationID := e.collect.eosCorrelationID
-						e.handlerLock.RUnlock()
-
-						if event.Action == eosToken && event.UUID == correlationID {
-							log.Printf("Received EOS Event with UUID: %s %s", event.UUID, correlationID)
-							e.handlerLock.Lock()
-							e.collect.enable = false
-							close(e.collect.respChan)
-							e.handlerLock.Unlock()
-							break
-						}
-
-						e.handlerLock.RLock()
-						if e.collect.enable {
-							e.collect.respChan <- &EventResponse{
-								Event: event,
-								Error: docError,
-							}
-						}
-						e.handlerLock.RUnlock()
-						e.versionChan <- event.Version
+				e.handlerLock.RLock()
+				if e.collect.enable {
+					e.collect.respChan <- &EventResponse{
+						Event: event,
+						Error: docError,
 					}
 				}
-				session.MarkMessage(msg, "")
-
+				e.handlerLock.RUnlock()
+				e.versionChan <- event.Version
 			}
+			session.MarkMessage(msg, "")
+
 		}
 	}
 }
